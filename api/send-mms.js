@@ -18,9 +18,8 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.MESSAGEME_API_KEY;
   const callback = String(process.env.MESSAGEME_CALLBACK || '').replace(/\D/g, '');
-  if (!apiKey || !callback || !process.env.BLOB_READ_WRITE_TOKEN) {
-    return res.status(503).json({ error: '문자 발송 설정이 아직 완료되지 않았습니다.' });
-  }
+  if (!apiKey) return res.status(503).json({ error: 'MESSAGEME_API_KEY가 등록되지 않았습니다.' });
+  if (!callback) return res.status(503).json({ error: 'MESSAGEME_CALLBACK 발신번호가 등록되지 않았습니다.' });
 
   try {
     const dstaddr = String(req.body?.phone || '').replace(/\D/g, '');
@@ -31,12 +30,18 @@ export default async function handler(req, res) {
     const image = Buffer.from(match[1], 'base64');
     if (image.length > 500_000) return res.status(400).json({ error: '전송용 사진은 500KB 이하여야 합니다.' });
 
-    const blob = await put(`fourcut/${randomUUID()}.jpg`, image, {
-      access: 'public',
-      contentType: 'image/jpeg',
-      addRandomSuffix: false,
-      cacheControlMaxAge: 86400
-    });
+    let blob;
+    try {
+      blob = await put(`fourcut/${randomUUID()}.jpg`, image, {
+        access: 'public',
+        contentType: 'image/jpeg',
+        addRandomSuffix: false,
+        cacheControlMaxAge: 86400
+      });
+    } catch (error) {
+      console.error('[Vercel Blob]', error.message);
+      return res.status(503).json({ error: 'Vercel Blob이 프로젝트에 연결되지 않았습니다.' });
+    }
 
     const form = new URLSearchParams({
       api_key: apiKey,
