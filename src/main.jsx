@@ -302,16 +302,21 @@ function App() {
   async function makeMmsImage() {
     const source = canvasRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = 600; canvas.height = 800;
+    // 네컷 원본 비율(1:3)을 유지한 채 MMS 용량만 줄인다.
+    canvas.width = 720;
+    canvas.height = 2160;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = template.bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const targetH = 760, targetW = source.width * targetH / source.height;
-    ctx.drawImage(source, (canvas.width - targetW) / 2, 20, targetW, targetH);
-    for (let quality = .86; quality >= .5; quality -= .08) {
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    for (let quality = .86; quality >= .38; quality -= .06) {
       const data = canvas.toDataURL('image/jpeg', quality);
       if (Math.ceil((data.length - 23) * 3 / 4) < 480_000) return data;
     }
-    return canvas.toDataURL('image/jpeg', .5);
+
+    // 사진이 매우 복잡해도 비율은 그대로 유지하고 해상도만 한 단계 낮춘다.
+    canvas.width = 540;
+    canvas.height = 1620;
+    canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', .42);
   }
 
   function downloadPhoto() {
