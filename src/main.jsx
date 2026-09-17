@@ -316,7 +316,11 @@ function App() {
     canvas.width = 540;
     canvas.height = 1620;
     canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', .42);
+    for (let quality = .48; quality >= .2; quality -= .04) {
+      const data = canvas.toDataURL('image/jpeg', quality);
+      if (Math.ceil((data.length - 23) * 3 / 4) < 480_000) return data;
+    }
+    return canvas.toDataURL('image/jpeg', .2);
   }
 
   function downloadPhoto() {
