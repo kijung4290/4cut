@@ -1,0 +1,21 @@
+{
+  "name": "fourcut-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build --minify=false --emptyOutDir=false",
+    "preview": "vite preview --host 0.0.0.0",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.0",
+    "@vitejs/plugin-react": "5.0.4",
+    "dotenv": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "7.3.6"
+  }
+}
