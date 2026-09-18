@@ -32,7 +32,8 @@ const DEFAULT_SETTINGS = {
   backgroundImage: null,
   backgroundOpacity: 0.45,
   guideGif: DEFAULT_GUIDE_GIF,
-  removeGifBackground: true
+  removeGifBackground: true,
+  guideGifScale: 100
 };
 let shotSequence = 0;
 
@@ -141,7 +142,7 @@ function AdminPage() {
             <p className="field-help">카메라 화면 오른쪽에서 움직이며 촬영 사진에도 함께 들어갑니다. 큰 파일은 기기 안에서 자동 압축되어 잠시 시간이 걸릴 수 있습니다.</p>
             <label className="background-removal-toggle"><input type="checkbox" checked={settings.removeGifBackground} onChange={e => setSettings(prev => ({...prev, removeGifBackground:e.target.checked}))}/><span><b>흰 배경 자동 제거</b><small>가장자리와 연결된 흰색만 투명하게 처리합니다.</small></span></label>
             <div className="guide-settings-row">
-              {settings.guideGif && <div className="guide-admin-preview"><img src={settings.guideGif} alt="촬영 가이드 미리보기"/><span>미리보기</span></div>}
+              {settings.guideGif && <div className="guide-admin-preview"><img src={settings.guideGif} alt="촬영 가이드 미리보기" style={{transform:`scale(${settings.guideGifScale / 100})`}}/><span>미리보기</span></div>}
               <div className="guide-setting-actions">
                 <label className={`logo-upload ${gifBusy ? 'is-busy' : ''}`} aria-busy={gifBusy}><Sparkles size={18}/><span>{gifBusy ? 'GIF 압축 중…' : settings.guideGif ? 'GIF 바꾸기' : 'GIF 올리기'}<small>원본 GIF 최대 40MB · 자동 압축</small></span><input type="file" accept="image/gif" onChange={loadGuideGif} disabled={gifBusy}/></label>
                 <div className="guide-mini-actions">
@@ -150,6 +151,7 @@ function AdminPage() {
                 </div>
               </div>
             </div>
+            <label className="gif-scale-control"><span>GIF 크기</span><input type="range" min="50" max="180" step="5" value={settings.guideGifScale} onChange={e => setSettings(prev => ({...prev, guideGifScale:Number(e.target.value)}))}/><b>{settings.guideGifScale}%</b></label>
             {gifStatus && <p className="gif-status" role="status">{gifStatus}</p>}
             {settingsError && <p className="settings-error" role="alert">{settingsError}</p>}
           </fieldset>
@@ -240,13 +242,14 @@ function App() {
       ctx.restore();
       const guide = guideGifRef.current;
       if (settings.guideGif && guide?.complete && guide.naturalWidth) {
+        const placement = getGuidePlacement(settings.guideGifScale);
         drawContain(
           ctx,
           guide,
-          c.width * GUIDE_PLACEMENT.x,
-          c.height * GUIDE_PLACEMENT.y,
-          c.width * GUIDE_PLACEMENT.width,
-          c.height * GUIDE_PLACEMENT.height
+          c.width * placement.x,
+          c.height * placement.y,
+          c.width * placement.width,
+          c.height * placement.height
         );
       }
       const data = c.toDataURL('image/jpeg', .92);
@@ -414,6 +417,13 @@ function App() {
   }
 
   const selectedNumber = useMemo(() => new Map(selected.map((photo, i) => [photo.id, i + 1])), [selected]);
+  const guidePlacement = getGuidePlacement(settings.guideGifScale);
+  const guideStyle = {
+    left: `${guidePlacement.x * 100}%`,
+    top: `${guidePlacement.y * 100}%`,
+    width: `${guidePlacement.width * 100}%`,
+    height: `${guidePlacement.height * 100}%`
+  };
 
   return (
     <main>
@@ -440,7 +450,7 @@ function App() {
             <div className="camera-stage no-guide">
               <div className="viewfinder">
                 <video ref={videoRef} autoPlay playsInline muted />
-                {settings.guideGif && <img ref={guideGifRef} className="camera-gif-overlay" src={settings.guideGif} alt="함께 촬영되는 움직이는 캐릭터"/>}
+                {settings.guideGif && <img ref={guideGifRef} className="camera-gif-overlay" style={guideStyle} src={settings.guideGif} alt="함께 촬영되는 움직이는 캐릭터"/>}
                 {settings.guideGif && <span className="composite-badge"><Sparkles size={12}/> 함께 촬영</span>}
                 <span className="corner tl"/><span className="corner tr"/><span className="corner bl"/><span className="corner br"/>
                 {countdown && <div className="countdown">{countdown}</div>}
@@ -515,6 +525,17 @@ function drawContain(ctx, img, x, y, w, h) {
   const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
   const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
   ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+}
+function getGuidePlacement(scalePercent) {
+  const scale = Math.min(1.8, Math.max(.5, Number(scalePercent || 100) / 100));
+  const width = GUIDE_PLACEMENT.width * scale;
+  const height = GUIDE_PLACEMENT.height * scale;
+  return {
+    x: GUIDE_PLACEMENT.x + GUIDE_PLACEMENT.width - width,
+    y: GUIDE_PLACEMENT.y + GUIDE_PLACEMENT.height - height,
+    width,
+    height
+  };
 }
 function loadImage(src) {
   return new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src; });
