@@ -14,6 +14,7 @@ const templates = [
 ];
 
 const STEPS = ['촬영', '사진 선택', '전송'];
+const DEFAULT_GUIDE_GIF = '/default-pose-guide.gif';
 const DEFAULT_SETTINGS = {
   templateId: 'blue',
   bg: '#2155e8',
@@ -23,7 +24,8 @@ const DEFAULT_SETTINGS = {
   tagline: '함께여서 더 빛난 오늘',
   logo: null,
   backgroundImage: null,
-  backgroundOpacity: 0.45
+  backgroundOpacity: 0.45,
+  guideGif: DEFAULT_GUIDE_GIF
 };
 let shotSequence = 0;
 
@@ -40,6 +42,7 @@ function loadSettings() {
 function AdminPage() {
   const [settings, setSettings] = useState(loadSettings);
   const [saved, setSaved] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
 
   function chooseTemplate(base) {
     setSettings(prev => ({ ...prev, templateId: base.id, bg: base.bg, ink: base.ink, accent: base.accent }));
@@ -61,10 +64,35 @@ function AdminPage() {
     event.target.value = '';
   }
 
+  function loadGuideGif(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setSettingsError('');
+    if (file.type !== 'image/gif') {
+      setSettingsError('움직이는 GIF 파일만 올릴 수 있습니다.');
+      event.target.value = '';
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setSettingsError('GIF 용량을 2MB 이하로 줄여서 올려 주세요.');
+      event.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => setSettings(prev => ({ ...prev, guideGif: e.target.result }));
+    reader.readAsDataURL(file);
+    event.target.value = '';
+  }
+
   function saveSettings() {
-    localStorage.setItem('fourcut-settings', JSON.stringify(settings));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2200);
+    try {
+      localStorage.setItem('fourcut-settings', JSON.stringify(settings));
+      setSettingsError('');
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2200);
+    } catch {
+      setSettingsError('저장 공간이 부족합니다. GIF 또는 배경 이미지의 용량을 줄여 주세요.');
+    }
   }
 
   return <main className="admin-page">
@@ -88,6 +116,20 @@ function AdminPage() {
           <fieldset><legend>프레임 배경 이미지</legend>
             <div className="background-upload-row"><label className="logo-upload"><ImagePlus size={18}/><span>{settings.backgroundImage ? '배경 이미지 바꾸기' : '배경 이미지 올리기'}<small>JPG, PNG · 자동 축소</small></span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={loadBackgroundImage}/></label>{settings.backgroundImage && <button className="icon-button" onClick={() => setSettings(prev => ({...prev, backgroundImage:null}))} aria-label="배경 이미지 삭제"><X size={18}/></button>}</div>
             {settings.backgroundImage && <label className="opacity-field"><span>이미지 선명도</span><input type="range" min="10" max="100" value={Math.round(settings.backgroundOpacity*100)} onChange={e => setSettings(prev => ({...prev, backgroundOpacity:Number(e.target.value)/100}))}/><b>{Math.round(settings.backgroundOpacity*100)}%</b></label>}
+          </fieldset>
+          <fieldset><legend>촬영 가이드 GIF</legend>
+            <p className="field-help">촬영할 때 카메라 옆에서 반복 재생됩니다. 완성 사진에는 들어가지 않습니다.</p>
+            <div className="guide-settings-row">
+              {settings.guideGif && <div className="guide-admin-preview"><img src={settings.guideGif} alt="촬영 가이드 미리보기"/><span>미리보기</span></div>}
+              <div className="guide-setting-actions">
+                <label className="logo-upload"><Sparkles size={18}/><span>{settings.guideGif ? 'GIF 바꾸기' : 'GIF 올리기'}<small>GIF · 최대 2MB</small></span><input type="file" accept="image/gif" onChange={loadGuideGif}/></label>
+                <div className="guide-mini-actions">
+                  <button type="button" onClick={() => setSettings(prev => ({...prev, guideGif: DEFAULT_GUIDE_GIF}))}>기본 GIF</button>
+                  {settings.guideGif && <button type="button" onClick={() => setSettings(prev => ({...prev, guideGif:null}))}>표시 안 함</button>}
+                </div>
+              </div>
+            </div>
+            {settingsError && <p className="settings-error" role="alert">{settingsError}</p>}
           </fieldset>
           <fieldset><legend>기관 정보</legend>
             <label className="text-field"><span>기관명</span><input value={settings.orgName} maxLength={22} onChange={e => setSettings(prev => ({...prev, orgName:e.target.value}))}/></label>
@@ -359,12 +401,19 @@ function App() {
             <p>마음에 드는 사진이 나올 때까지 자유롭게 촬영할 수 있어요.</p>
           </div>
           <div className="camera-card">
-            <div className="viewfinder">
-              <video ref={videoRef} autoPlay playsInline muted />
-              <span className="corner tl"/><span className="corner tr"/><span className="corner bl"/><span className="corner br"/>
-              {countdown && <div className="countdown">{countdown}</div>}
-              {cameraError && <div className="camera-error"><Camera size={34}/><p>{cameraError}</p></div>}
-              <div className="shot-count">{shots.length}장 촬영</div>
+            <div className={`camera-stage ${settings.guideGif ? '' : 'no-guide'}`}>
+              <div className="viewfinder">
+                <video ref={videoRef} autoPlay playsInline muted />
+                <span className="corner tl"/><span className="corner tr"/><span className="corner bl"/><span className="corner br"/>
+                {countdown && <div className="countdown">{countdown}</div>}
+                {cameraError && <div className="camera-error"><Camera size={34}/><p>{cameraError}</p></div>}
+                <div className="shot-count">{shots.length}장 촬영</div>
+              </div>
+              {settings.guideGif && <aside className="pose-guide" aria-label="움직이는 촬영 포즈 가이드">
+                <div className="pose-guide-label"><Sparkles size={13}/><span>POSE LOOP</span></div>
+                <img src={settings.guideGif} alt="따라 해 볼 촬영 포즈"/>
+                <p>움직임을<br/>따라 해보세요</p>
+              </aside>}
             </div>
             <div className="camera-actions">
               <button className="round secondary" onClick={() => setFacingMode(f => f === 'user' ? 'environment' : 'user')} aria-label="카메라 전환"><RefreshCw/></button>
