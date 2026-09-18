@@ -4,6 +4,8 @@ import {
   Camera, Check, ChevronLeft, ChevronRight, Download, ImagePlus,
   Mail, MessageCircle, RefreshCw, Sparkles, Upload, X, Save, Home
 } from 'lucide-react';
+import { decode, decodeFrames, encode } from 'modern-gif';
+import gifWorkerUrl from 'modern-gif/worker?url';
 import './styles.css';
 
 const templates = [
@@ -16,6 +18,9 @@ const templates = [
 const STEPS = ['촬영', '사진 선택', '전송'];
 const DEFAULT_GUIDE_GIF = '/default-pose-guide.gif';
 const GUIDE_PLACEMENT = { x: 0.64, y: 0.08, width: 0.34, height: 0.84 };
+const MAX_GIF_UPLOAD_BYTES = 40 * 1024 * 1024;
+const TARGET_GIF_BYTES = 900 * 1024;
+const MAX_DECODED_GIF_BYTES = 220 * 1024 * 1024;
 const DEFAULT_SETTINGS = {
   templateId: 'blue',
   bg: '#2155e8',
@@ -44,6 +49,8 @@ function AdminPage() {
   const [settings, setSettings] = useState(loadSettings);
   const [saved, setSaved] = useState(false);
   const [settingsError, setSettingsError] = useState('');
+  const [gifBusy, setGifBusy] = useState(false);
+  const [gifStatus, setGifStatus] = useState('');
 
   function chooseTemplate(base) {
     setSettings(prev => ({ ...prev, templateId: base.id, bg: base.bg, ink: base.ink, accent: base.accent }));
@@ -65,24 +72,35 @@ function AdminPage() {
     event.target.value = '';
   }
 
-  function loadGuideGif(event) {
+  async function loadGuideGif(event) {
     const file = event.target.files?.[0];
     if (!file) return;
     setSettingsError('');
-    if (file.type !== 'image/gif') {
+    setGifStatus('');
+    if (file.type !== 'image/gif' && !file.name.toLowerCase().endsWith('.gif')) {
       setSettingsError('움직이는 GIF 파일만 올릴 수 있습니다.');
       event.target.value = '';
       return;
     }
-    if (file.size > 2 * 1024 * 1024) {
-      setSettingsError('GIF 용량을 2MB 이하로 줄여서 올려 주세요.');
+    if (file.size > MAX_GIF_UPLOAD_BYTES) {
+      setSettingsError('원본 GIF는 최대 40MB까지 올릴 수 있습니다.');
       event.target.value = '';
       return;
     }
-    const reader = new FileReader();
-    reader.onload = e => setSettings(prev => ({ ...prev, guideGif: e.target.result }));
-    reader.readAsDataURL(file);
     event.target.value = '';
+    setGifBusy(true);
+    setGifStatus('GIF 분석 중…');
+    try {
+      const result = await compressGuideGif(file, message => setGifStatus(message));
+      const dataUrl = await blobToDataUrl(result.blob);
+      setSettings(prev => ({ ...prev, guideGif: dataUrl }));
+      setGifStatus(`${formatBytes(file.size)} → ${formatBytes(result.blob.size)}로 압축 완료 · 설정 저장을 눌러 주세요.`);
+    } catch (error) {
+      setGifStatus('');
+      setSettingsError(error.message || 'GIF를 압축하지 못했습니다. 다른 파일로 다시 시도해 주세요.');
+    } finally {
+      setGifBusy(false);
+    }
   }
 
   function saveSettings() {
@@ -119,17 +137,18 @@ function AdminPage() {
             {settings.backgroundImage && <label className="opacity-field"><span>이미지 선명도</span><input type="range" min="10" max="100" value={Math.round(settings.backgroundOpacity*100)} onChange={e => setSettings(prev => ({...prev, backgroundOpacity:Number(e.target.value)/100}))}/><b>{Math.round(settings.backgroundOpacity*100)}%</b></label>}
           </fieldset>
           <fieldset><legend>촬영 가이드 GIF</legend>
-            <p className="field-help">카메라 화면 오른쪽에서 움직이며 촬영 사진에도 함께 들어갑니다. 배경이 투명한 GIF를 권장합니다.</p>
+            <p className="field-help">카메라 화면 오른쪽에서 움직이며 촬영 사진에도 함께 들어갑니다. 큰 파일은 기기 안에서 자동 압축되어 잠시 시간이 걸릴 수 있습니다.</p>
             <div className="guide-settings-row">
               {settings.guideGif && <div className="guide-admin-preview"><img src={settings.guideGif} alt="촬영 가이드 미리보기"/><span>미리보기</span></div>}
               <div className="guide-setting-actions">
-                <label className="logo-upload"><Sparkles size={18}/><span>{settings.guideGif ? 'GIF 바꾸기' : 'GIF 올리기'}<small>GIF · 최대 2MB</small></span><input type="file" accept="image/gif" onChange={loadGuideGif}/></label>
+                <label className={`logo-upload ${gifBusy ? 'is-busy' : ''}`} aria-busy={gifBusy}><Sparkles size={18}/><span>{gifBusy ? 'GIF 압축 중…' : settings.guideGif ? 'GIF 바꾸기' : 'GIF 올리기'}<small>원본 GIF 최대 40MB · 자동 압축</small></span><input type="file" accept="image/gif" onChange={loadGuideGif} disabled={gifBusy}/></label>
                 <div className="guide-mini-actions">
                   <button type="button" onClick={() => setSettings(prev => ({...prev, guideGif: DEFAULT_GUIDE_GIF}))}>기본 GIF</button>
                   {settings.guideGif && <button type="button" onClick={() => setSettings(prev => ({...prev, guideGif:null}))}>표시 안 함</button>}
                 </div>
               </div>
             </div>
+            {gifStatus && <p className="gif-status" role="status">{gifStatus}</p>}
             {settingsError && <p className="settings-error" role="alert">{settingsError}</p>}
           </fieldset>
           <fieldset><legend>기관 정보</legend>
@@ -137,7 +156,7 @@ function AdminPage() {
             <label className="text-field admin-tagline"><span>하단 문구</span><input value={settings.tagline} maxLength={30} onChange={e => setSettings(prev => ({...prev, tagline:e.target.value}))}/></label>
             <div className="logo-row"><label className="logo-upload"><Upload size={18}/><span>{settings.logo ? '로고 바꾸기' : '기관 로고 올리기'}<small>PNG, JPG 권장</small></span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={loadAdminLogo}/></label>{settings.logo && <button className="icon-button" onClick={() => setSettings(prev => ({...prev, logo:null}))} aria-label="로고 삭제"><X size={18}/></button>}</div>
           </fieldset>
-          <button className="save-settings" onClick={saveSettings}><Save size={19}/>{saved ? '저장되었습니다' : '설정 저장하기'}</button>
+          <button className="save-settings" onClick={saveSettings} disabled={gifBusy}><Save size={19}/>{saved ? '저장되었습니다' : '설정 저장하기'}</button>
         </div>
       </div>
     </section>
@@ -516,6 +535,105 @@ function resizeImageFile(file, maxWidth, maxHeight, quality) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+async function compressGuideGif(file, onProgress) {
+  const buffer = await file.arrayBuffer();
+  const gif = decode(buffer);
+  const decodedBytes = gif.width * gif.height * gif.frames.length * 4;
+  if (decodedBytes > MAX_DECODED_GIF_BYTES) {
+    throw new Error('GIF의 해상도나 재생 시간이 너무 깁니다. 크기 또는 재생 시간을 줄인 뒤 다시 시도해 주세요.');
+  }
+
+  onProgress(`GIF 프레임 읽는 중… (${gif.frames.length}장)`);
+  const decodedFrames = await decodeFrames(buffer, { gif, workerUrl: gifWorkerUrl });
+  const attempts = [
+    { maxSide: 520, maxFrames: 72, maxColors: 96 },
+    { maxSide: 440, maxFrames: 56, maxColors: 72 },
+    { maxSide: 360, maxFrames: 44, maxColors: 56 },
+    { maxSide: 300, maxFrames: 32, maxColors: 40 },
+    { maxSide: 240, maxFrames: 24, maxColors: 32 },
+  ];
+  let bestBlob = null;
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    const scale = Math.min(1, attempt.maxSide / Math.max(gif.width, gif.height));
+    const width = Math.max(1, Math.round(gif.width * scale));
+    const height = Math.max(1, Math.round(gif.height * scale));
+    const sampled = sampleGifFrames(decodedFrames, attempt.maxFrames);
+    onProgress(`GIF 압축 중… ${index + 1}/${attempts.length} · ${width}×${height}`);
+    const frames = resizeGifFrames(sampled, width, height);
+    const output = await encode({
+      workerUrl: gifWorkerUrl,
+      width,
+      height,
+      frames,
+      maxColors: attempt.maxColors,
+      dither: 'floyd-steinberg',
+      ditherTransparency: 'floyd-steinberg',
+    });
+    const blob = new Blob([output], { type: 'image/gif' });
+    if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob;
+    if (blob.size <= TARGET_GIF_BYTES) return { blob, width, height };
+    await yieldToBrowser();
+  }
+
+  if (bestBlob.size > 1.8 * 1024 * 1024) {
+    throw new Error('자동 압축 후에도 GIF가 너무 큽니다. 더 짧은 GIF로 다시 시도해 주세요.');
+  }
+  return { blob: bestBlob };
+}
+
+function sampleGifFrames(frames, maxFrames) {
+  if (frames.length <= maxFrames) return frames;
+  const sampled = [];
+  const step = frames.length / maxFrames;
+  for (let index = 0; index < maxFrames; index += 1) {
+    const start = Math.floor(index * step);
+    const end = Math.max(start + 1, Math.floor((index + 1) * step));
+    const delay = frames.slice(start, end).reduce((sum, frame) => sum + Math.max(frame.delay || 20, 20), 0);
+    sampled.push({ ...frames[start], delay });
+  }
+  return sampled;
+}
+
+function resizeGifFrames(frames, width, height) {
+  const source = document.createElement('canvas');
+  const target = document.createElement('canvas');
+  const sourceCtx = source.getContext('2d');
+  const targetCtx = target.getContext('2d', { willReadFrequently: true });
+  target.width = width;
+  target.height = height;
+  targetCtx.imageSmoothingEnabled = true;
+  targetCtx.imageSmoothingQuality = 'high';
+
+  return frames.map(frame => {
+    source.width = frame.width;
+    source.height = frame.height;
+    sourceCtx.putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
+    targetCtx.clearRect(0, 0, width, height);
+    targetCtx.drawImage(source, 0, 0, width, height);
+    return { data: targetCtx.getImageData(0, 0, width, height).data, delay: frame.delay };
+  });
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('압축된 GIF를 읽지 못했습니다.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function yieldToBrowser() {
+  return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 createRoot(document.getElementById('root')).render(location.pathname.startsWith('/admin') ? <AdminPage /> : <App />);
