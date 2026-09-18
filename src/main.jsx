@@ -31,7 +31,8 @@ const DEFAULT_SETTINGS = {
   logo: null,
   backgroundImage: null,
   backgroundOpacity: 0.45,
-  guideGif: DEFAULT_GUIDE_GIF
+  guideGif: DEFAULT_GUIDE_GIF,
+  removeGifBackground: true
 };
 let shotSequence = 0;
 
@@ -91,7 +92,7 @@ function AdminPage() {
     setGifBusy(true);
     setGifStatus('GIF 분석 중…');
     try {
-      const result = await compressGuideGif(file, message => setGifStatus(message));
+      const result = await compressGuideGif(file, settings.removeGifBackground, message => setGifStatus(message));
       const dataUrl = await blobToDataUrl(result.blob);
       setSettings(prev => ({ ...prev, guideGif: dataUrl }));
       setGifStatus(`${formatBytes(file.size)} → ${formatBytes(result.blob.size)}로 압축 완료 · 설정 저장을 눌러 주세요.`);
@@ -138,6 +139,7 @@ function AdminPage() {
           </fieldset>
           <fieldset><legend>촬영 가이드 GIF</legend>
             <p className="field-help">카메라 화면 오른쪽에서 움직이며 촬영 사진에도 함께 들어갑니다. 큰 파일은 기기 안에서 자동 압축되어 잠시 시간이 걸릴 수 있습니다.</p>
+            <label className="background-removal-toggle"><input type="checkbox" checked={settings.removeGifBackground} onChange={e => setSettings(prev => ({...prev, removeGifBackground:e.target.checked}))}/><span><b>흰 배경 자동 제거</b><small>가장자리와 연결된 흰색만 투명하게 처리합니다.</small></span></label>
             <div className="guide-settings-row">
               {settings.guideGif && <div className="guide-admin-preview"><img src={settings.guideGif} alt="촬영 가이드 미리보기"/><span>미리보기</span></div>}
               <div className="guide-setting-actions">
@@ -537,7 +539,7 @@ function resizeImageFile(file, maxWidth, maxHeight, quality) {
   });
 }
 
-async function compressGuideGif(file, onProgress) {
+async function compressGuideGif(file, removeBackground, onProgress) {
   const buffer = await file.arrayBuffer();
   const gif = decode(buffer);
   const decodedBytes = gif.width * gif.height * gif.frames.length * 4;
@@ -562,14 +564,15 @@ async function compressGuideGif(file, onProgress) {
     const width = Math.max(1, Math.round(gif.width * scale));
     const height = Math.max(1, Math.round(gif.height * scale));
     const sampled = sampleGifFrames(decodedFrames, attempt.maxFrames);
-    onProgress(`GIF 압축 중… ${index + 1}/${attempts.length} · ${width}×${height}`);
-    const frames = resizeGifFrames(sampled, width, height);
+    onProgress(`${removeBackground ? '흰 배경 제거·' : ''}GIF 압축 중… ${index + 1}/${attempts.length} · ${width}×${height}`);
+    const frames = resizeGifFrames(sampled, width, height, removeBackground);
     const output = await encode({
       workerUrl: gifWorkerUrl,
       width,
       height,
       frames,
       maxColors: attempt.maxColors,
+      premultipliedAlpha: true,
       dither: 'floyd-steinberg',
       ditherTransparency: 'floyd-steinberg',
     });
@@ -598,7 +601,7 @@ function sampleGifFrames(frames, maxFrames) {
   return sampled;
 }
 
-function resizeGifFrames(frames, width, height) {
+function resizeGifFrames(frames, width, height, removeBackground) {
   const source = document.createElement('canvas');
   const target = document.createElement('canvas');
   const sourceCtx = source.getContext('2d');
@@ -614,8 +617,80 @@ function resizeGifFrames(frames, width, height) {
     sourceCtx.putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
     targetCtx.clearRect(0, 0, width, height);
     targetCtx.drawImage(source, 0, 0, width, height);
-    return { data: targetCtx.getImageData(0, 0, width, height).data, delay: frame.delay };
+    const pixels = targetCtx.getImageData(0, 0, width, height).data;
+    return { data: removeBackground ? removeEdgeWhiteBackground(pixels, width, height) : pixels, delay: frame.delay };
   });
+}
+
+function removeEdgeWhiteBackground(pixels, width, height) {
+  const result = new Uint8ClampedArray(pixels);
+  const pixelCount = width * height;
+  const visited = new Uint8Array(pixelCount);
+  const queue = new Int32Array(pixelCount);
+  let head = 0;
+  let tail = 0;
+
+  const isEdgeWhite = index => {
+    const offset = index * 4;
+    const alpha = result[offset + 3];
+    if (alpha < 24) return true;
+    const red = result[offset];
+    const green = result[offset + 1];
+    const blue = result[offset + 2];
+    return alpha > 220 && Math.min(red, green, blue) >= 238 && Math.max(red, green, blue) - Math.min(red, green, blue) <= 18;
+  };
+
+  const corners = [0, width - 1, (height - 1) * width, pixelCount - 1];
+  const whiteCornerCount = corners.filter(index => isEdgeWhite(index) && result[index * 4 + 3] > 220).length;
+  const transparentCornerCount = corners.filter(index => result[index * 4 + 3] < 24).length;
+  if (whiteCornerCount < 2 && transparentCornerCount < 2) return result;
+
+  const enqueue = index => {
+    if (visited[index] || !isEdgeWhite(index)) return;
+    visited[index] = 1;
+    queue[tail] = index;
+    tail += 1;
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    enqueue(x);
+    enqueue((height - 1) * width + x);
+  }
+  for (let y = 1; y < height - 1; y += 1) {
+    enqueue(y * width);
+    enqueue(y * width + width - 1);
+  }
+
+  while (head < tail) {
+    const index = queue[head];
+    head += 1;
+    result[index * 4 + 3] = 0;
+    const x = index % width;
+    if (x > 0) enqueue(index - 1);
+    if (x < width - 1) enqueue(index + 1);
+    if (index >= width) enqueue(index - width);
+    if (index < pixelCount - width) enqueue(index + width);
+  }
+
+  // Feather one pixel around the removed area to avoid a pale halo.
+  const sourceAlpha = new Uint8ClampedArray(pixelCount);
+  for (let index = 0; index < pixelCount; index += 1) sourceAlpha[index] = result[index * 4 + 3];
+  for (let index = 0; index < pixelCount; index += 1) {
+    if (sourceAlpha[index] === 0) continue;
+    const x = index % width;
+    const touchesTransparent = (x > 0 && sourceAlpha[index - 1] === 0)
+      || (x < width - 1 && sourceAlpha[index + 1] === 0)
+      || (index >= width && sourceAlpha[index - width] === 0)
+      || (index < pixelCount - width && sourceAlpha[index + width] === 0);
+    if (!touchesTransparent) continue;
+    const offset = index * 4;
+    const minimum = Math.min(result[offset], result[offset + 1], result[offset + 2]);
+    const maximum = Math.max(result[offset], result[offset + 1], result[offset + 2]);
+    if (minimum >= 215 && maximum - minimum <= 28) {
+      result[offset + 3] = Math.min(result[offset + 3], Math.max(0, Math.min(255, (255 - minimum) * 12)));
+    }
+  }
+  return result;
 }
 
 function blobToDataUrl(blob) {
