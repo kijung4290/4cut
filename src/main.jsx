@@ -425,7 +425,7 @@ function App() {
         if (captureRunRef.current !== runId) return;
 
         if (index < 7) {
-          for (let second = 2; second >= 1; second -= 1) {
+          for (let second = 5; second >= 1; second -= 1) {
             setCountdown(second);
             await delay(1000);
             if (captureRunRef.current !== runId) return;
