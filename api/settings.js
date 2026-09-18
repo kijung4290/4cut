@@ -39,9 +39,10 @@ function safeExistingAsset(value) {
   if (value === '/default-pose-guide.gif') return value;
   try {
     const url = new URL(value);
-    if (url.protocol === 'https:' && url.hostname.endsWith('.public.blob.vercel-storage.com')) return url.href;
+    if (url.protocol === 'https:') return url.href;
   } catch {}
-  throw new Error('허용되지 않은 이미지 주소입니다.');
+  // Ignore stale browser-only URLs instead of blocking the other settings.
+  return null;
 }
 
 async function storeAsset(value, label) {
