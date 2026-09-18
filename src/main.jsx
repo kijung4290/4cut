@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Camera, Check, ChevronLeft, ChevronRight, Download, ImagePlus,
-  Mail, MessageCircle, RefreshCw, Sparkles, Upload, X, Save, Home
+  Mail, MessageCircle, Move, RefreshCw, Sparkles, Upload, X, Save, Home
 } from 'lucide-react';
 import { decode, decodeFrames, encode } from 'modern-gif';
 import gifWorkerUrl from 'modern-gif/worker?url';
@@ -33,7 +33,9 @@ const DEFAULT_SETTINGS = {
   backgroundOpacity: 0.45,
   guideGif: DEFAULT_GUIDE_GIF,
   removeGifBackground: true,
-  guideGifScale: 100
+  guideGifScale: 100,
+  guideGifX: 81,
+  guideGifY: 50
 };
 let shotSequence = 0;
 
@@ -48,11 +50,75 @@ function loadSettings() {
 }
 
 function AdminPage() {
+  const adminVideoRef = useRef(null);
+  const adminStreamRef = useRef(null);
+  const adminViewfinderRef = useRef(null);
+  const draggingGuideRef = useRef(false);
+  const guideDragOffsetRef = useRef({ x: 0, y: 0 });
   const [settings, setSettings] = useState(loadSettings);
   const [saved, setSaved] = useState(false);
   const [settingsError, setSettingsError] = useState('');
   const [gifBusy, setGifBusy] = useState(false);
   const [gifStatus, setGifStatus] = useState('');
+  const [previewMode, setPreviewMode] = useState('camera');
+  const [adminCameraError, setAdminCameraError] = useState('');
+
+  useEffect(() => {
+    startAdminCamera();
+    return stopAdminCamera;
+  }, []);
+
+  async function startAdminCamera() {
+    stopAdminCamera();
+    setAdminCameraError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false
+      });
+      adminStreamRef.current = stream;
+      if (adminVideoRef.current) adminVideoRef.current.srcObject = stream;
+      else stream.getTracks().forEach(track => track.stop());
+    } catch {
+      setAdminCameraError('카메라 권한을 허용하면 실제 촬영 화면에서 위치를 조정할 수 있습니다.');
+    }
+  }
+
+  function stopAdminCamera() {
+    adminStreamRef.current?.getTracks().forEach(track => track.stop());
+    adminStreamRef.current = null;
+  }
+
+  function updateGuidePosition(event) {
+    const rect = adminViewfinderRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const pointerX = ((event.clientX - rect.left) / rect.width) * 100;
+    const pointerY = ((event.clientY - rect.top) / rect.height) * 100;
+    const x = Math.max(0, Math.min(100, pointerX - guideDragOffsetRef.current.x));
+    const y = Math.max(0, Math.min(100, pointerY - guideDragOffsetRef.current.y));
+    setSettings(prev => ({ ...prev, guideGifX: Math.round(x), guideGifY: Math.round(y) }));
+  }
+
+  function beginGuideDrag(event) {
+    event.preventDefault();
+    draggingGuideRef.current = true;
+    const rect = adminViewfinderRef.current?.getBoundingClientRect();
+    if (rect) {
+      guideDragOffsetRef.current = {
+        x: ((event.clientX - rect.left) / rect.width) * 100 - settings.guideGifX,
+        y: ((event.clientY - rect.top) / rect.height) * 100 - settings.guideGifY
+      };
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    updateGuidePosition(event);
+  }
+
+  function moveGuide(event) {
+    if (draggingGuideRef.current) updateGuidePosition(event);
+  }
+
+  function endGuideDrag() {
+    draggingGuideRef.current = false;
+  }
 
   function chooseTemplate(base) {
     setSettings(prev => ({ ...prev, templateId: base.id, bg: base.bg, ink: base.ink, accent: base.accent }));
@@ -116,6 +182,9 @@ function AdminPage() {
     }
   }
 
+  const adminGuidePlacement = getGuidePlacement(settings.guideGifScale, settings.guideGifX, settings.guideGifY);
+  const adminGuideStyle = getGuideStyle(adminGuidePlacement);
+
   return <main className="admin-page">
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><Sparkles size={21}/></span><span>네컷 관리자</span></div>
@@ -124,8 +193,33 @@ function AdminPage() {
     <section className="admin-workspace">
       <div className="admin-heading"><p className="eyebrow">ADMIN · FRAME STUDIO</p><h1>네컷 프레임 설정</h1><p>여기서 저장한 디자인이 메인 촬영 화면에 적용됩니다.</p></div>
       <div className="admin-grid">
-        <div className="admin-preview" style={{'--frame-bg': settings.bg, '--frame-ink': settings.ink, '--frame-accent': settings.accent}}>
-          <div className="admin-strip" style={settings.backgroundImage ? {backgroundImage:`linear-gradient(rgba(0,0,0,${1-settings.backgroundOpacity}),rgba(0,0,0,${1-settings.backgroundOpacity})), url(${settings.backgroundImage})`} : undefined}><b>FOUR MOMENTS</b>{[1,2,3,4].map(n => <span key={n}>PHOTO {n}</span>)}<div><strong>{settings.orgName || '우리 기관'}</strong><small>{settings.tagline || '함께여서 더 빛난 오늘'}</small>{settings.logo ? <img src={settings.logo} alt="기관 로고"/> : <i>LOGO</i>}</div></div>
+        <div className="admin-preview-shell">
+          <div className="admin-preview-tabs" role="tablist" aria-label="미리보기 선택">
+            <button type="button" className={previewMode === 'camera' ? 'active' : ''} onClick={() => setPreviewMode('camera')}><Camera size={15}/> 실제 카메라</button>
+            <button type="button" className={previewMode === 'frame' ? 'active' : ''} onClick={() => setPreviewMode('frame')}><ImagePlus size={15}/> 네컷 프레임</button>
+          </div>
+          <div className={`admin-live-preview ${previewMode !== 'camera' ? 'preview-pane-hidden' : ''}`}>
+            <div ref={adminViewfinderRef} className="admin-live-viewfinder">
+              <video ref={adminVideoRef} autoPlay playsInline muted/>
+              {settings.guideGif && <img
+                className="admin-draggable-gif"
+                src={settings.guideGif}
+                style={adminGuideStyle}
+                alt="촬영 GIF 위치 미리보기"
+                draggable={false}
+                onPointerDown={beginGuideDrag}
+                onPointerMove={moveGuide}
+                onPointerUp={endGuideDrag}
+                onPointerCancel={endGuideDrag}
+              />}
+              <span className="admin-preview-badge"><Move size={13}/> GIF를 끌어 이동</span>
+              {adminCameraError && <div className="admin-camera-error"><Camera size={28}/><p>{adminCameraError}</p><button type="button" onClick={startAdminCamera}>다시 연결</button></div>}
+            </div>
+            <p><b>실제 촬영 미리보기</b><span>GIF를 직접 끌거나 오른쪽 슬라이더로 조정하세요.</span></p>
+          </div>
+          <div className={`admin-preview ${previewMode !== 'frame' ? 'preview-pane-hidden' : ''}`} style={{'--frame-bg': settings.bg, '--frame-ink': settings.ink, '--frame-accent': settings.accent}}>
+            <div className="admin-strip" style={settings.backgroundImage ? {backgroundImage:`linear-gradient(rgba(0,0,0,${1-settings.backgroundOpacity}),rgba(0,0,0,${1-settings.backgroundOpacity})), url(${settings.backgroundImage})`} : undefined}><b>FOUR MOMENTS</b>{[1,2,3,4].map(n => <span key={n}>PHOTO {n}</span>)}<div><strong>{settings.orgName || '우리 기관'}</strong><small>{settings.tagline || '함께여서 더 빛난 오늘'}</small>{settings.logo ? <img src={settings.logo} alt="기관 로고"/> : <i>LOGO</i>}</div></div>
+          </div>
         </div>
         <div className="admin-controls">
           <fieldset><legend>기본 템플릿</legend><div className="template-grid">
@@ -151,7 +245,12 @@ function AdminPage() {
                 </div>
               </div>
             </div>
-            <label className="gif-scale-control"><span>GIF 크기</span><input type="range" min="50" max="180" step="5" value={settings.guideGifScale} onChange={e => setSettings(prev => ({...prev, guideGifScale:Number(e.target.value)}))}/><b>{settings.guideGifScale}%</b></label>
+            <div className="gif-layout-controls">
+              <label className="gif-scale-control"><span>GIF 크기</span><input type="range" min="50" max="180" step="5" value={settings.guideGifScale} onChange={e => setSettings(prev => ({...prev, guideGifScale:Number(e.target.value)}))}/><b>{settings.guideGifScale}%</b></label>
+              <label className="gif-scale-control"><span>가로 위치</span><input type="range" min="0" max="100" value={settings.guideGifX} onChange={e => setSettings(prev => ({...prev, guideGifX:Number(e.target.value)}))}/><b>{settings.guideGifX}%</b></label>
+              <label className="gif-scale-control"><span>세로 위치</span><input type="range" min="0" max="100" value={settings.guideGifY} onChange={e => setSettings(prev => ({...prev, guideGifY:Number(e.target.value)}))}/><b>{settings.guideGifY}%</b></label>
+              <button type="button" className="reset-gif-layout" onClick={() => setSettings(prev => ({...prev, guideGifScale:100, guideGifX:81, guideGifY:50}))}><RefreshCw size={14}/> 위치·크기 초기화</button>
+            </div>
             {gifStatus && <p className="gif-status" role="status">{gifStatus}</p>}
             {settingsError && <p className="settings-error" role="alert">{settingsError}</p>}
           </fieldset>
@@ -242,7 +341,7 @@ function App() {
       ctx.restore();
       const guide = guideGifRef.current;
       if (settings.guideGif && guide?.complete && guide.naturalWidth) {
-        const placement = getGuidePlacement(settings.guideGifScale);
+        const placement = getGuidePlacement(settings.guideGifScale, settings.guideGifX, settings.guideGifY);
         drawContain(
           ctx,
           guide,
@@ -417,13 +516,8 @@ function App() {
   }
 
   const selectedNumber = useMemo(() => new Map(selected.map((photo, i) => [photo.id, i + 1])), [selected]);
-  const guidePlacement = getGuidePlacement(settings.guideGifScale);
-  const guideStyle = {
-    left: `${guidePlacement.x * 100}%`,
-    top: `${guidePlacement.y * 100}%`,
-    width: `${guidePlacement.width * 100}%`,
-    height: `${guidePlacement.height * 100}%`
-  };
+  const guidePlacement = getGuidePlacement(settings.guideGifScale, settings.guideGifX, settings.guideGifY);
+  const guideStyle = getGuideStyle(guidePlacement);
 
   return (
     <main>
@@ -526,15 +620,23 @@ function drawContain(ctx, img, x, y, w, h) {
   const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
   ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
 }
-function getGuidePlacement(scalePercent) {
+function getGuidePlacement(scalePercent, xPercent = 81, yPercent = 50) {
   const scale = Math.min(1.8, Math.max(.5, Number(scalePercent || 100) / 100));
   const width = GUIDE_PLACEMENT.width * scale;
   const height = GUIDE_PLACEMENT.height * scale;
   return {
-    x: GUIDE_PLACEMENT.x + GUIDE_PLACEMENT.width - width,
-    y: GUIDE_PLACEMENT.y + GUIDE_PLACEMENT.height - height,
+    x: Math.max(0, Math.min(100, Number(xPercent))) / 100 - width / 2,
+    y: Math.max(0, Math.min(100, Number(yPercent))) / 100 - height / 2,
     width,
     height
+  };
+}
+function getGuideStyle(placement) {
+  return {
+    left: `${placement.x * 100}%`,
+    top: `${placement.y * 100}%`,
+    width: `${placement.width * 100}%`,
+    height: `${placement.height * 100}%`
   };
 }
 function loadImage(src) {
