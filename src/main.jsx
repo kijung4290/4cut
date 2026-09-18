@@ -246,7 +246,7 @@ function AdminPage() {
               </div>
             </div>
             <div className="gif-layout-controls">
-              <label className="gif-scale-control"><span>GIF 크기</span><input type="range" min="50" max="180" step="5" value={settings.guideGifScale} onChange={e => setSettings(prev => ({...prev, guideGifScale:Number(e.target.value)}))}/><b>{settings.guideGifScale}%</b></label>
+              <label className="gif-scale-control"><span>GIF 크기</span><input type="range" min="50" max="250" step="5" value={settings.guideGifScale} onChange={e => setSettings(prev => ({...prev, guideGifScale:Number(e.target.value)}))}/><b>{settings.guideGifScale}%</b></label>
               <label className="gif-scale-control"><span>가로 위치</span><input type="range" min="0" max="100" value={settings.guideGifX} onChange={e => setSettings(prev => ({...prev, guideGifX:Number(e.target.value)}))}/><b>{settings.guideGifX}%</b></label>
               <label className="gif-scale-control"><span>세로 위치</span><input type="range" min="0" max="100" value={settings.guideGifY} onChange={e => setSettings(prev => ({...prev, guideGifY:Number(e.target.value)}))}/><b>{settings.guideGifY}%</b></label>
               <button type="button" className="reset-gif-layout" onClick={() => setSettings(prev => ({...prev, guideGifScale:100, guideGifX:81, guideGifY:50}))}><RefreshCw size={14}/> 위치·크기 초기화</button>
@@ -621,7 +621,7 @@ function drawContain(ctx, img, x, y, w, h) {
   ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
 }
 function getGuidePlacement(scalePercent, xPercent = 81, yPercent = 50) {
-  const scale = Math.min(1.8, Math.max(.5, Number(scalePercent || 100) / 100));
+  const scale = Math.min(2.5, Math.max(.5, Number(scalePercent || 100) / 100));
   const width = GUIDE_PLACEMENT.width * scale;
   const height = GUIDE_PLACEMENT.height * scale;
   return {
