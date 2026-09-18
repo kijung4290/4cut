@@ -15,6 +15,7 @@ const templates = [
 
 const STEPS = ['촬영', '사진 선택', '전송'];
 const DEFAULT_GUIDE_GIF = '/default-pose-guide.gif';
+const GUIDE_PLACEMENT = { x: 0.64, y: 0.08, width: 0.34, height: 0.84 };
 const DEFAULT_SETTINGS = {
   templateId: 'blue',
   bg: '#2155e8',
@@ -118,7 +119,7 @@ function AdminPage() {
             {settings.backgroundImage && <label className="opacity-field"><span>이미지 선명도</span><input type="range" min="10" max="100" value={Math.round(settings.backgroundOpacity*100)} onChange={e => setSettings(prev => ({...prev, backgroundOpacity:Number(e.target.value)/100}))}/><b>{Math.round(settings.backgroundOpacity*100)}%</b></label>}
           </fieldset>
           <fieldset><legend>촬영 가이드 GIF</legend>
-            <p className="field-help">촬영할 때 카메라 옆에서 반복 재생됩니다. 완성 사진에는 들어가지 않습니다.</p>
+            <p className="field-help">카메라 화면 오른쪽에서 움직이며 촬영 사진에도 함께 들어갑니다. 배경이 투명한 GIF를 권장합니다.</p>
             <div className="guide-settings-row">
               {settings.guideGif && <div className="guide-admin-preview"><img src={settings.guideGif} alt="촬영 가이드 미리보기"/><span>미리보기</span></div>}
               <div className="guide-setting-actions">
@@ -145,6 +146,7 @@ function AdminPage() {
 
 function App() {
   const videoRef = useRef(null);
+  const guideGifRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const [step, setStep] = useState(0);
@@ -211,8 +213,21 @@ function App() {
       const c = document.createElement('canvas');
       c.width = 900; c.height = 675;
       const ctx = c.getContext('2d');
+      ctx.save();
       ctx.translate(c.width, 0); ctx.scale(-1, 1);
       drawCover(ctx, v, 0, 0, c.width, c.height);
+      ctx.restore();
+      const guide = guideGifRef.current;
+      if (settings.guideGif && guide?.complete && guide.naturalWidth) {
+        drawContain(
+          ctx,
+          guide,
+          c.width * GUIDE_PLACEMENT.x,
+          c.height * GUIDE_PLACEMENT.y,
+          c.width * GUIDE_PLACEMENT.width,
+          c.height * GUIDE_PLACEMENT.height
+        );
+      }
       const data = c.toDataURL('image/jpeg', .92);
       setShots(prev => [...prev, createShot(data)]);
       setTimeout(() => setCountdown(null), 450);
@@ -401,19 +416,16 @@ function App() {
             <p>마음에 드는 사진이 나올 때까지 자유롭게 촬영할 수 있어요.</p>
           </div>
           <div className="camera-card">
-            <div className={`camera-stage ${settings.guideGif ? '' : 'no-guide'}`}>
+            <div className="camera-stage no-guide">
               <div className="viewfinder">
                 <video ref={videoRef} autoPlay playsInline muted />
+                {settings.guideGif && <img ref={guideGifRef} className="camera-gif-overlay" src={settings.guideGif} alt="함께 촬영되는 움직이는 캐릭터"/>}
+                {settings.guideGif && <span className="composite-badge"><Sparkles size={12}/> 함께 촬영</span>}
                 <span className="corner tl"/><span className="corner tr"/><span className="corner bl"/><span className="corner br"/>
                 {countdown && <div className="countdown">{countdown}</div>}
                 {cameraError && <div className="camera-error"><Camera size={34}/><p>{cameraError}</p></div>}
                 <div className="shot-count">{shots.length}장 촬영</div>
               </div>
-              {settings.guideGif && <aside className="pose-guide" aria-label="움직이는 촬영 포즈 가이드">
-                <div className="pose-guide-label"><Sparkles size={13}/><span>POSE LOOP</span></div>
-                <img src={settings.guideGif} alt="따라 해 볼 촬영 포즈"/>
-                <p>움직임을<br/>따라 해보세요</p>
-              </aside>}
             </div>
             <div className="camera-actions">
               <button className="round secondary" onClick={() => setFacingMode(f => f === 'user' ? 'environment' : 'user')} aria-label="카메라 전환"><RefreshCw/></button>
