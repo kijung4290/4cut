@@ -315,11 +315,13 @@ function App() {
   const guideGifRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
+  const captureRunRef = useRef(0);
   const [step, setStep] = useState(0);
   const [shots, setShots] = useState([]);
   const [selected, setSelected] = useState([]);
   const [settings, setSettings] = useState(loadSettings);
   const [countdown, setCountdown] = useState(null);
+  const [isCapturing, setIsCapturing] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [toast, setToast] = useState('');
   const [facingMode, setFacingMode] = useState('user');
@@ -348,6 +350,8 @@ function App() {
 
   useEffect(() => () => finalUrl && URL.revokeObjectURL(finalUrl), [finalUrl]);
 
+  useEffect(() => () => { captureRunRef.current += 1; }, []);
+
   const flashToast = (message) => {
     setToast(message);
     window.clearTimeout(window.__toastTimer);
@@ -373,39 +377,73 @@ function App() {
     streamRef.current = null;
   }
 
-  function snap() {
+  function captureFrame() {
+    const v = videoRef.current;
+    const c = document.createElement('canvas');
+    c.width = 900; c.height = 675;
+    const ctx = c.getContext('2d');
+    ctx.save();
+    ctx.translate(c.width, 0); ctx.scale(-1, 1);
+    drawCover(ctx, v, 0, 0, c.width, c.height);
+    ctx.restore();
+    const guide = guideGifRef.current;
+    if (settings.guideGif && guide?.complete && guide.naturalWidth) {
+      const placement = getGuidePlacement(settings.guideGifScale, settings.guideGifX, settings.guideGifY);
+      drawContain(
+        ctx,
+        guide,
+        c.width * placement.x,
+        c.height * placement.y,
+        c.width * placement.width,
+        c.height * placement.height
+      );
+    }
+    return createShot(c.toDataURL('image/jpeg', .92));
+  }
+
+  async function snap() {
     if (!videoRef.current?.videoWidth) return flashToast('카메라가 준비될 때까지 잠시 기다려 주세요.');
-    let n = 3;
-    setCountdown(n);
-    const timer = setInterval(() => {
-      n -= 1;
-      if (n > 0) return setCountdown(n);
-      clearInterval(timer);
-      setCountdown('찰칵!');
-      const v = videoRef.current;
-      const c = document.createElement('canvas');
-      c.width = 900; c.height = 675;
-      const ctx = c.getContext('2d');
-      ctx.save();
-      ctx.translate(c.width, 0); ctx.scale(-1, 1);
-      drawCover(ctx, v, 0, 0, c.width, c.height);
-      ctx.restore();
-      const guide = guideGifRef.current;
-      if (settings.guideGif && guide?.complete && guide.naturalWidth) {
-        const placement = getGuidePlacement(settings.guideGifScale, settings.guideGifX, settings.guideGifY);
-        drawContain(
-          ctx,
-          guide,
-          c.width * placement.x,
-          c.height * placement.y,
-          c.width * placement.width,
-          c.height * placement.height
-        );
+    if (isCapturing) return;
+    const runId = captureRunRef.current + 1;
+    captureRunRef.current = runId;
+    setIsCapturing(true);
+    setShots([]);
+    setSelected([]);
+
+    try {
+      for (let second = 5; second >= 1; second -= 1) {
+        setCountdown(second);
+        await delay(1000);
+        if (captureRunRef.current !== runId) return;
       }
-      const data = c.toDataURL('image/jpeg', .92);
-      setShots(prev => [...prev, createShot(data)]);
-      setTimeout(() => setCountdown(null), 450);
-    }, 850);
+
+      for (let index = 0; index < 8; index += 1) {
+        const photo = captureFrame();
+        setShots(prev => [...prev, photo]);
+        setCountdown(`찰칵! ${index + 1}/8`);
+        await delay(500);
+        if (captureRunRef.current !== runId) return;
+
+        if (index < 7) {
+          for (let second = 2; second >= 1; second -= 1) {
+            setCountdown(second);
+            await delay(1000);
+            if (captureRunRef.current !== runId) return;
+          }
+        }
+      }
+
+      setCountdown('촬영 완료!');
+      await delay(700);
+      if (captureRunRef.current === runId) setStep(1);
+    } catch {
+      flashToast('촬영 이미지를 만들지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      if (captureRunRef.current === runId) {
+        setCountdown(null);
+        setIsCapturing(false);
+      }
+    }
   }
 
   function loadPhotos(event) {
@@ -583,8 +621,8 @@ function App() {
         {step === 0 && <>
           <div className="intro">
             <p className="eyebrow">STEP 1 · CAMERA</p>
-            <h1>지금 이 순간을<br/><em>네 번</em> 담아보세요.</h1>
-            <p>마음에 드는 사진이 나올 때까지 자유롭게 촬영할 수 있어요.</p>
+            <h1>한 번 누르고<br/><em>여덟 장</em> 담아보세요.</h1>
+            <p>5초 동안 준비하면 서로 다른 표정의 사진 8장을 자동으로 촬영해요.</p>
           </div>
           <div className="camera-card">
             <div className="camera-stage no-guide">
@@ -593,15 +631,15 @@ function App() {
                 {settings.guideGif && <img ref={guideGifRef} className="camera-gif-overlay" style={guideStyle} src={settings.guideGif} crossOrigin="anonymous" alt="함께 촬영되는 움직이는 캐릭터"/>}
                 {settings.guideGif && <span className="composite-badge"><Sparkles size={12}/> 함께 촬영</span>}
                 <span className="corner tl"/><span className="corner tr"/><span className="corner bl"/><span className="corner br"/>
-                {countdown && <div className="countdown">{countdown}</div>}
+                {countdown && <div className={`countdown ${typeof countdown === 'string' ? 'message' : ''}`}>{countdown}</div>}
                 {cameraError && <div className="camera-error"><Camera size={34}/><p>{cameraError}</p></div>}
-                <div className="shot-count">{shots.length}장 촬영</div>
+                <div className="shot-count">{shots.length} / 8장 촬영</div>
               </div>
             </div>
             <div className="camera-actions">
-              <button className="round secondary" onClick={() => setFacingMode(f => f === 'user' ? 'environment' : 'user')} aria-label="카메라 전환"><RefreshCw/></button>
-              <button className="shutter" onClick={snap} aria-label="사진 촬영"><span/></button>
-              <label className="round secondary file-button" aria-label="사진 불러오기"><ImagePlus/><input type="file" accept="image/*" multiple onChange={loadPhotos}/></label>
+              <button className="round secondary" onClick={() => setFacingMode(f => f === 'user' ? 'environment' : 'user')} aria-label="카메라 전환" disabled={isCapturing}><RefreshCw/></button>
+              <button className={`shutter ${isCapturing ? 'capturing' : ''}`} onClick={snap} aria-label="8장 자동 촬영" disabled={isCapturing}><span/></button>
+              <label className={`round secondary file-button ${isCapturing ? 'disabled' : ''}`} aria-label="사진 불러오기"><ImagePlus/><input type="file" accept="image/*" multiple onChange={loadPhotos} disabled={isCapturing}/></label>
             </div>
           </div>
           {shots.length > 0 && <div className="mini-roll">{shots.map((photo, i) => <img src={photo.src} key={photo.id} alt={`${i+1}번째 촬영 사진`}/>)}</div>}
@@ -644,7 +682,7 @@ function App() {
 
       <footer className="bottom-nav">
         <button className="back" disabled={step === 0} onClick={() => setStep(s => s - 1)}><ChevronLeft/> 이전</button>
-        {step < 2 && <button className="next" onClick={next}>{step === 0 ? '사진 고르기' : '사진 완성하기'} <ChevronRight/></button>}
+        {step < 2 && <button className="next" onClick={next} disabled={isCapturing}>{step === 0 ? '사진 고르기' : '사진 완성하기'} <ChevronRight/></button>}
       </footer>
       {toast && <div className="toast">{toast}</div>}
     </main>
@@ -653,6 +691,9 @@ function App() {
 
 function roundedRect(ctx, x, y, w, h, r) {
   ctx.beginPath(); ctx.roundRect(x, y, w, h, r);
+}
+function delay(milliseconds) {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds));
 }
 function drawCover(ctx, img, x, y, w, h) {
   const iw = img.videoWidth || img.naturalWidth || img.width;
