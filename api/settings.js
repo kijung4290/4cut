@@ -88,10 +88,6 @@ function normalizeSettings(input, assets) {
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return res.status(503).json({ error: 'Vercel Blob이 프로젝트에 연결되지 않았습니다.' });
-  }
-
   try {
     if (req.method === 'GET') {
       const record = await latestSettings();
