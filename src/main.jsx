@@ -49,6 +49,19 @@ function loadSettings() {
   catch { return DEFAULT_SETTINGS; }
 }
 
+async function fetchSharedSettings() {
+  const response = await fetch('/api/settings', { cache: 'no-store' });
+  const result = await readApiResponse(response);
+  if (!response.ok) throw new Error(result.error || '공용 설정을 불러오지 못했습니다.');
+  return result.settings ? { ...DEFAULT_SETTINGS, ...result.settings } : null;
+}
+
+async function readApiResponse(response) {
+  const text = await response.text();
+  try { return JSON.parse(text); }
+  catch { return { error: response.ok ? '서버 응답 형식이 올바르지 않습니다.' : '서버 요청을 처리하지 못했습니다.' }; }
+}
+
 function AdminPage() {
   const adminVideoRef = useRef(null);
   const adminStreamRef = useRef(null);
@@ -62,10 +75,21 @@ function AdminPage() {
   const [gifStatus, setGifStatus] = useState('');
   const [previewMode, setPreviewMode] = useState('camera');
   const [adminCameraError, setAdminCameraError] = useState('');
+  const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
     startAdminCamera();
     return stopAdminCamera;
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetchSharedSettings().then(shared => {
+      if (!active || !shared) return;
+      setSettings(shared);
+      localStorage.setItem('fourcut-settings', JSON.stringify(shared));
+    }).catch(() => {});
+    return () => { active = false; };
   }, []);
 
   async function startAdminCamera() {
@@ -124,12 +148,17 @@ function AdminPage() {
     setSettings(prev => ({ ...prev, templateId: base.id, bg: base.bg, ink: base.ink, accent: base.accent }));
   }
 
-  function loadAdminLogo(event) {
+  async function loadAdminLogo(event) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = e => setSettings(prev => ({ ...prev, logo: e.target.result }));
-    reader.readAsDataURL(file);
+    try {
+      const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+      const resized = await resizeImageFile(file, 800, 500, .86, outputType);
+      setSettings(prev => ({ ...prev, logo: resized }));
+    } catch {
+      setSettingsError('로고 이미지를 읽지 못했습니다.');
+    }
+    event.target.value = '';
   }
 
   async function loadBackgroundImage(event) {
@@ -171,14 +200,29 @@ function AdminPage() {
     }
   }
 
-  function saveSettings() {
+  async function saveSettings() {
+    setSavingSettings(true);
+    setSettingsError('');
+    try { localStorage.setItem('fourcut-settings', JSON.stringify(settings)); }
+    catch {}
     try {
-      localStorage.setItem('fourcut-settings', JSON.stringify(settings));
-      setSettingsError('');
+      const response = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings })
+      });
+      const result = await readApiResponse(response);
+      if (!response.ok) throw new Error(result.error || '공용 설정을 저장하지 못했습니다.');
+      const shared = { ...DEFAULT_SETTINGS, ...result.settings };
+      setSettings(shared);
+      try { localStorage.setItem('fourcut-settings', JSON.stringify(shared)); }
+      catch {}
       setSaved(true);
       setTimeout(() => setSaved(false), 2200);
-    } catch {
-      setSettingsError('저장 공간이 부족합니다. GIF 또는 배경 이미지의 용량을 줄여 주세요.');
+    } catch (error) {
+      setSettingsError(`${error.message} 이 기기에는 임시 저장되었습니다.`);
+    } finally {
+      setSavingSettings(false);
     }
   }
 
@@ -259,7 +303,7 @@ function AdminPage() {
             <label className="text-field admin-tagline"><span>하단 문구</span><input value={settings.tagline} maxLength={30} onChange={e => setSettings(prev => ({...prev, tagline:e.target.value}))}/></label>
             <div className="logo-row"><label className="logo-upload"><Upload size={18}/><span>{settings.logo ? '로고 바꾸기' : '기관 로고 올리기'}<small>PNG, JPG 권장</small></span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={loadAdminLogo}/></label>{settings.logo && <button className="icon-button" onClick={() => setSettings(prev => ({...prev, logo:null}))} aria-label="로고 삭제"><X size={18}/></button>}</div>
           </fieldset>
-          <button className="save-settings" onClick={saveSettings} disabled={gifBusy}><Save size={19}/>{saved ? '저장되었습니다' : '설정 저장하기'}</button>
+          <button className="save-settings" onClick={saveSettings} disabled={gifBusy || savingSettings}><Save size={19}/>{savingSettings ? '모든 기기에 저장 중…' : saved ? '모든 기기에 저장되었습니다' : '모든 기기에 설정 저장'}</button>
         </div>
       </div>
     </section>
@@ -274,10 +318,7 @@ function App() {
   const [step, setStep] = useState(0);
   const [shots, setShots] = useState([]);
   const [selected, setSelected] = useState([]);
-  const [settings] = useState(loadSettings);
-  const [template] = useState(() => ({ ...templates.find(t => t.id === settings.templateId) || templates[0], bg: settings.bg, ink: settings.ink, accent: settings.accent }));
-  const [logo] = useState(settings.logo);
-  const [orgName] = useState(settings.orgName);
+  const [settings, setSettings] = useState(loadSettings);
   const [countdown, setCountdown] = useState(null);
   const [cameraError, setCameraError] = useState('');
   const [toast, setToast] = useState('');
@@ -292,8 +333,18 @@ function App() {
   }, [step, facingMode]);
 
   useEffect(() => {
+    let active = true;
+    fetchSharedSettings().then(shared => {
+      if (!active || !shared) return;
+      setSettings(shared);
+      localStorage.setItem('fourcut-settings', JSON.stringify(shared));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (step >= 2) renderStrip();
-  }, [step, selected, template, logo, orgName]);
+  }, [step, selected, settings]);
 
   useEffect(() => () => finalUrl && URL.revokeObjectURL(finalUrl), [finalUrl]);
 
@@ -373,20 +424,15 @@ function App() {
       : prev.length < 4 ? [...prev, photo] : prev);
   }
 
-  function loadLogo(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = e => setLogo(e.target.result);
-    reader.readAsDataURL(file);
-  }
-
   async function renderStrip() {
     const canvas = canvasRef.current;
     if (!canvas || selected.length !== 4) return;
     const ctx = canvas.getContext('2d');
     const W = 900, H = 2700, pad = 70, photoW = 760, photoH = 495, gap = 28;
     canvas.width = W; canvas.height = H;
+    const template = { ...templates.find(t => t.id === settings.templateId) || templates[0], bg: settings.bg, ink: settings.ink, accent: settings.accent };
+    const logo = settings.logo;
+    const orgName = settings.orgName;
     ctx.fillStyle = template.bg; ctx.fillRect(0, 0, W, H);
     if (settings.backgroundImage) {
       const background = await loadImage(settings.backgroundImage);
@@ -544,7 +590,7 @@ function App() {
             <div className="camera-stage no-guide">
               <div className="viewfinder">
                 <video ref={videoRef} autoPlay playsInline muted />
-                {settings.guideGif && <img ref={guideGifRef} className="camera-gif-overlay" style={guideStyle} src={settings.guideGif} alt="함께 촬영되는 움직이는 캐릭터"/>}
+                {settings.guideGif && <img ref={guideGifRef} className="camera-gif-overlay" style={guideStyle} src={settings.guideGif} crossOrigin="anonymous" alt="함께 촬영되는 움직이는 캐릭터"/>}
                 {settings.guideGif && <span className="composite-badge"><Sparkles size={12}/> 함께 촬영</span>}
                 <span className="corner tl"/><span className="corner tr"/><span className="corner bl"/><span className="corner br"/>
                 {countdown && <div className="countdown">{countdown}</div>}
@@ -640,10 +686,16 @@ function getGuideStyle(placement) {
   };
 }
 function loadImage(src) {
-  return new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src; });
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    if (/^https?:/i.test(src)) img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
 }
 
-function resizeImageFile(file, maxWidth, maxHeight, quality) {
+function resizeImageFile(file, maxWidth, maxHeight, quality, outputType = 'image/jpeg') {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = reject;
@@ -655,7 +707,7 @@ function resizeImageFile(file, maxWidth, maxHeight, quality) {
         canvas.width = Math.round(img.naturalWidth * scale);
         canvas.height = Math.round(img.naturalHeight * scale);
         canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        resolve(canvas.toDataURL(outputType, quality));
       } catch (error) { reject(error); }
     };
     reader.readAsDataURL(file);
